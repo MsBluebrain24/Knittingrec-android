@@ -181,6 +181,25 @@ textarea.input { min-height: 64px; resize: vertical; }
 .bulk-actions .text-btn.remove { color: var(--muted); }
 .bulk-foot { position: sticky; bottom: calc(-20px - env(safe-area-inset-bottom)); background: var(--bg); padding: 12px 0 calc(20px + env(safe-area-inset-bottom)); margin-bottom: calc(-20px - env(safe-area-inset-bottom)); border-top: 1px solid var(--line); }
 .bulk-foot .btn { width: 100%; }
+/* progress photos */
+.prog-head { display: flex; align-items: center; justify-content: space-between; margin: 20px 0 6px; padding-top: 16px; border-top: 1px solid var(--line); }
+.prog-head .f { margin: 0; }
+.prog-head .text-btn { min-height: 36px; }
+.prog { display: grid; grid-template-columns: 72px minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.prog .thumb { width: 72px; height: 72px; border-radius: 2px; overflow: hidden; background: var(--surface); }
+.prog .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.prog .fields { display: flex; flex-direction: column; gap: 6px; }
+.prog .input { padding: 7px 8px; font-size: 16px; }
+.prog .input[type="date"] { min-height: 38px; }
+.prog .text-btn { min-height: 36px; font-size: 13px; color: var(--muted); }
+.prog-view .prog { grid-template-columns: 72px minmax(0, 1fr); }
+.prog-view .prog-head { border-top: 0; padding-top: 0; margin-top: 16px; }
+.prog .pdate { font-size: 13px; font-variant-numeric: tabular-nums; }
+.prog .pnote { font-size: 14px; overflow-wrap: anywhere; }
+.viewer { background: #000; border: 0; max-width: 100%; width: 100%; height: 100%; max-height: 100%; margin: 0; border-radius: 0; }
+.viewer img { width: 100%; height: calc(100% - 64px); object-fit: contain; display: block; }
+.viewer .cap { color: #fff; padding: 8px 16px calc(8px + env(safe-area-inset-bottom)); display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 13px; }
+.viewer .cap .text-btn { color: #fff; }
 [hidden] { display: none !important; }
 </style>
 </head>
@@ -227,6 +246,14 @@ textarea.input { min-height: 64px; resize: vertical; }
       <button type="button" class="btn" id="finishBtn">완성 처리</button>
       <button type="button" class="btn danger" id="deleteBtn">삭제</button>
     </div>
+    <div id="progWrap" hidden>
+      <div class="prog-head">
+        <span class="f">진행 기록</span>
+        <button type="button" class="text-btn" id="progAddBtn">진행 사진 추가</button>
+      </div>
+      <p class="hint" id="progHint">사진 찍은 날짜로 기록됩니다. 날짜와 메모는 바로 저장됩니다.</p>
+      <div id="progList"></div>
+    </div>
   </form>
 </dialog>
 
@@ -262,6 +289,7 @@ textarea.input { min-height: 64px; resize: vertical; }
         <div class="note" id="detailNote"></div>
       </div>
     </div>
+    <div class="prog-view" id="detailProg"></div>
     <div class="actions">
       <button type="button" class="btn" id="detailEditBtn">수정</button>
       <button type="button" class="btn" id="reopenBtn">진행 중으로</button>
@@ -306,6 +334,11 @@ textarea.input { min-height: 64px; resize: vertical; }
     </div>
     <p class="hint" id="backupInfo"></p>
   </form>
+</dialog>
+
+<dialog id="viewDlg" class="viewer">
+  <img id="viewImg" alt="">
+  <div class="cap"><span id="viewCap"></span><button type="button" class="text-btn" data-close>닫기</button></div>
 </dialog>
 
 <input type="file" id="photoInput" accept="image/*" multiple hidden>
@@ -383,8 +416,14 @@ function thumbUrl(ph) {
   if (!thumbUrls.has(ph.id)) thumbUrls.set(ph.id, URL.createObjectURL(ph.thumb));
   return thumbUrls.get(ph.id);
 }
+const isProg = x => x.stage === "progress";
+// Finished-work photos (gallery / detail carousel).
 function photosOf(pid) {
-  return photos.filter(p => p.projectId === pid).sort((a, b) => a.createdAt - b.createdAt);
+  return photos.filter(p => p.projectId === pid && !isProg(p)).sort((a, b) => a.createdAt - b.createdAt);
+}
+// Work-in-progress photos, newest first.
+function progressOf(pid) {
+  return photos.filter(p => p.projectId === pid && isProg(p)).sort((a, b) => b.at - a.at || b.createdAt - a.createdAt);
 }
 
 let toastTimer;
@@ -419,7 +458,7 @@ function renderActive() {
       <div>
         <div class="name">${esc(p.name)}</div>
         ${p.note ? `<div class="note">${esc(p.note)}</div>` : ""}
-        <div class="since">${sinceText(p.updatedAt)}</div>
+        <div class="since">${sinceText(p.updatedAt)}${(pr => pr.length ? ` · 진행 사진 ${pr.length}장 (마지막 ${fmtDate(pr[0].at)})` : "")(progressOf(p.id))}</div>
       </div>
     </button>`).join("")}</div>`;
 }
@@ -460,7 +499,7 @@ function renderDone() {
   const body = groups.length ? groups.map(g => `
     <div class="group-title">${g.key}</div>
     <div class="grid">${g.items.map(p => {
-      const ph = photosOf(p.id);
+      const fin = photosOf(p.id), ph = fin.length ? fin : progressOf(p.id);
       return `<button class="tile" data-detail="${p.id}">
         <div class="ph">${ph.length ? `<img src="${thumbUrl(ph[0])}" alt="" loading="lazy">` : "사진 없음"}
           ${ph.length > 1 ? `<span class="count">${ph.length}</span>` : ""}</div>
@@ -493,6 +532,8 @@ function openEdit(p) {
   $("#doneAtWrap").hidden = !isDone;
   $("#mmOptionalHint").hidden = !isDone;
   if (isDone) $("#doneAtIn").value = toDateInput(p.doneAt);
+  $("#progWrap").hidden = !p;
+  if (p) renderProg();
   renderMmGrid();
   $("#editDlg").showModal();
   if (!p) setTimeout(() => $("#nameIn").focus(), 50);
@@ -531,7 +572,7 @@ function upsertLocal(p) {
 }
 async function deleteProject(p) {
   if (!confirm(`'${p.name}'을(를) 삭제할까요? 사진도 함께 지워지며 되돌릴 수 없습니다.`)) return false;
-  const ids = photosOf(p.id).map(x => x.id);
+  const ids = photos.filter(x => x.projectId === p.id).map(x => x.id);
   await run(["projects", "photos", "fulls"], "readwrite", tx => {
     tx.objectStore("projects").delete(p.id);
     for (const id of ids) { tx.objectStore("photos").delete(id); tx.objectStore("fulls").delete(id); }
@@ -650,6 +691,51 @@ $("#photoInput").addEventListener("change", async e => {
     if (out.length) await photoPickHandler(out);
   } finally { busy(false); }
 });
+
+/* ---------- progress photos ---------- */
+function renderProg() {
+  const list = progressOf(editing.id);
+  $("#progHint").hidden = list.length > 0;
+  $("#progList").innerHTML = list.map(x => `
+    <div class="prog" data-prog="${x.id}">
+      <button type="button" class="thumb" data-view="${x.id}" aria-label="크게 보기"><img src="${thumbUrl(x)}" alt=""></button>
+      <div class="fields">
+        <input class="input" type="date" data-pfield="at" value="${toDateInput(x.at)}" aria-label="날짜">
+        <input class="input" data-pfield="note" value="${esc(x.note)}" placeholder="메모 (예: 몸통 12단까지)" maxlength="100" autocomplete="off">
+      </div>
+      <button type="button" class="text-btn" data-delphoto="${x.id}">삭제</button>
+    </div>`).join("");
+}
+async function addProgress(p, processed) {
+  const now = Date.now(), today = fromDateInput(toDateInput(now));
+  const recs = processed.map((x, i) => ({ id: uid(), projectId: p.id, createdAt: now + i, thumb: x.thumb,
+    stage: "progress", at: x.takenAt || today, note: "" }));
+  const proj = { ...p, updatedAt: now };
+  await run(["photos", "fulls", "projects"], "readwrite", tx => {
+    recs.forEach((r, i) => { tx.objectStore("photos").put(r); tx.objectStore("fulls").put({ id: r.id, full: processed[i].full }); });
+    tx.objectStore("projects").put(proj);
+  });
+  photos.push(...recs);
+  upsertLocal(proj);
+  return proj;
+}
+async function updateProg(id, field, value) {
+  const x = photos.find(y => y.id === id);
+  if (!x) return;
+  if (field === "at") { if (!value) return; x.at = fromDateInput(value); } else x.note = value.trim();
+  await run(["photos"], "readwrite", tx => { tx.objectStore("photos").put(x); });
+  if (field === "at") renderProg();
+  render();
+}
+async function openView(id) {
+  const x = photos.find(y => y.id === id);
+  if (!x) return;
+  const f = await run(["fulls"], "readonly", tx => reqP(tx.objectStore("fulls").get(id)));
+  const old = $("#viewImg").src; if (old.startsWith("blob:")) URL.revokeObjectURL(old);
+  $("#viewImg").src = URL.createObjectURL(f ? f.full : x.thumb);
+  $("#viewCap").textContent = isProg(x) ? `${fmtDate(x.at)}${x.note ? " · " + x.note : ""}` : "";
+  $("#viewDlg").showModal();
+}
 
 /* ---------- finish flow ---------- */
 let finishing = null, finishPending = [];
@@ -792,13 +878,20 @@ async function renderDetailPhotos() {
     const u = URL.createObjectURL(blob); fullUrls.push(u);
     return `<div class="p"><img src="${u}" alt=""><button type="button" class="del" data-delphoto="${x.id}" >삭제</button></div>`;
   }).join("") + `<button type="button" class="add-photo" id="detailAddPhoto">사진 추가</button>`;
+  const prog = progressOf(detailing.id).reverse();   // oldest first: reads as a timeline
+  $("#detailProg").innerHTML = prog.length ? `<div class="prog-head"><span class="f">진행 기록 ${prog.length}장</span></div>` + prog.map(x => `
+    <div class="prog">
+      <button type="button" class="thumb" data-view="${x.id}" aria-label="크게 보기"><img src="${thumbUrl(x)}" alt=""></button>
+      <div><div class="pdate">${fmtDate(x.at)}</div>${x.note ? `<div class="pnote">${esc(x.note)}</div>` : ""}</div>
+    </div>`).join("") : "";
 }
 async function deletePhoto(id) {
   if (!confirm("이 사진을 지울까요?")) return;
   await run(["photos", "fulls"], "readwrite", tx => { tx.objectStore("photos").delete(id); tx.objectStore("fulls").delete(id); });
   photos = photos.filter(x => x.id !== id);
   if (thumbUrls.has(id)) { URL.revokeObjectURL(thumbUrls.get(id)); thumbUrls.delete(id); }
-  await renderDetailPhotos();
+  if ($("#editDlg").open && editing) renderProg();
+  if ($("#detailDlg").open && detailing) await renderDetailPhotos();
   render();
 }
 
@@ -814,6 +907,7 @@ async function exportBackup() {
     const outPhotos = [];
     for (const p of photos) {
       outPhotos.push({ id: p.id, projectId: p.projectId, createdAt: p.createdAt,
+        ...(isProg(p) ? { stage: p.stage, at: p.at, note: p.note || "" } : {}),
         thumb: await blobToDataUrl(p.thumb), full: fullMap.has(p.id) ? await blobToDataUrl(fullMap.get(p.id)) : null });
     }
     const data = { app: "knit-log", version: 1, exportedAt: new Date().toISOString(), projects, photos: outPhotos };
@@ -851,13 +945,15 @@ async function importBackup(file) {
     const recs = [];
     for (const p of data.photos || []) {
       const thumb = await dataUrlToBlob(p.thumb);
-      recs.push({ id: p.id, projectId: p.projectId, createdAt: p.createdAt, thumb, full: p.full ? await dataUrlToBlob(p.full) : thumb });
+      recs.push({ id: p.id, projectId: p.projectId, createdAt: p.createdAt, thumb,
+        ...(p.stage === "progress" ? { stage: "progress", at: p.at || p.createdAt, note: p.note || "" } : {}), full: p.full ? await dataUrlToBlob(p.full) : thumb });
     }
     await run(["projects", "photos", "fulls"], "readwrite", tx => {
       for (const p of data.projects) tx.objectStore("projects").put(p);
       for (const r of recs) {
-        tx.objectStore("photos").put({ id: r.id, projectId: r.projectId, createdAt: r.createdAt, thumb: r.thumb });
-        tx.objectStore("fulls").put({ id: r.id, full: r.full });
+        const { full, ...rec } = r;
+        tx.objectStore("photos").put(rec);
+        tx.objectStore("fulls").put({ id: r.id, full });
       }
     });
     await loadAll();
@@ -893,6 +989,7 @@ document.addEventListener("click", e => {
   if (t.dataset.remove) { bulkRows.splice(Number(t.dataset.remove), 1); renderBulk(); return; }
   if (t.id === "bulkBtn") { openBulk(); return; }
   if (t.dataset.delphoto) { deletePhoto(t.dataset.delphoto); return; }
+  if (t.dataset.view) { openView(t.dataset.view); return; }
   if (t.id === "addBtn") { openEdit(null); return; }
   if (t.id === "detailAddPhoto") {
     pickPhotos(async out => { await addPhotos(detailing.id, out); await renderDetailPhotos(); render(); toast("사진을 추가했습니다"); });
@@ -904,6 +1001,14 @@ $("#saveBtn").onclick = saveEdit;
 $("#nameIn").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); saveEdit(); } });
 $("#mmCustom").addEventListener("input", () => { if ($("#mmCustom").value.trim()) { selectedMm = null; renderMmGrid(); } });
 $("#finishBtn").onclick = () => openFinish(editing);
+$("#progAddBtn").onclick = () => pickPhotos(async out => {
+  editing = await addProgress(editing, out);
+  renderProg(); render(); toast(`진행 사진 ${out.length}장을 기록했습니다`);
+});
+document.addEventListener("change", e => {
+  const row = e.target.closest("[data-prog]");
+  if (row && e.target.dataset.pfield) updateProg(row.dataset.prog, e.target.dataset.pfield, e.target.value);
+});
 $("#deleteBtn").onclick = async () => { if (await deleteProject(editing)) $("#editDlg").close(); };
 $("#finishPickBtn").onclick = () => pickPhotos(out => { finishPending.push(...out); renderFinishPending(); });
 $("#finishConfirmBtn").onclick = confirmFinish;
@@ -951,6 +1056,7 @@ document.addEventListener("input", e => {
 });
 // Tapping outside a sheet closes it, except bulk entry where that would lose typed rows.
 document.querySelectorAll("dialog").forEach(d => d.addEventListener("click", e => { if (e.target === d && d.id !== "bulkDlg") d.close(); }));
+$("#viewImg").addEventListener("click", () => $("#viewDlg").close());
 $("#detailDlg").addEventListener("close", () => fullUrls.splice(0).forEach(u => URL.revokeObjectURL(u)));
 
 /* Android back: one history entry while any sheet is open, so "back" closes the sheet. */
