@@ -200,6 +200,11 @@ textarea.input { min-height: 64px; resize: vertical; }
 .viewer img { width: 100%; height: calc(100% - 64px); object-fit: contain; display: block; }
 .viewer .cap { color: #fff; padding: 8px 16px calc(8px + env(safe-area-inset-bottom)); display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 13px; }
 .viewer .cap .text-btn { color: #fff; }
+.pick-pair { display: flex; gap: 8px; }
+.pick-pair .btn { flex: 1; }
+.prog-head .picks { display: flex; gap: 12px; }
+.add-photo { display: flex; flex-direction: column; justify-content: center; align-items: stretch; gap: 8px; padding: 0 20%; }
+.add-photo .btn { width: 100%; }
 [hidden] { display: none !important; }
 </style>
 </head>
@@ -249,7 +254,7 @@ textarea.input { min-height: 64px; resize: vertical; }
     <div id="progWrap" hidden>
       <div class="prog-head">
         <span class="f">진행 기록</span>
-        <button type="button" class="text-btn" id="progAddBtn">진행 사진 추가</button>
+        <span class="picks"><button type="button" class="text-btn" id="progCamBtn">사진 찍기</button><button type="button" class="text-btn" id="progAddBtn">앨범에서</button></span>
       </div>
       <p class="hint" id="progHint">사진 찍은 날짜로 기록됩니다. 날짜와 메모는 바로 저장됩니다.</p>
       <div id="progList"></div>
@@ -266,7 +271,7 @@ textarea.input { min-height: 64px; resize: vertical; }
     </div>
     <p class="lead" id="finishName"></p>
     <label class="f">완성 사진 (선택)</label>
-    <button type="button" class="btn" id="finishPickBtn" style="width:100%">사진 찍기 또는 고르기</button>
+    <div class="pick-pair"><button type="button" class="btn" id="finishCamBtn">사진 찍기</button><button type="button" class="btn" id="finishPickBtn">앨범에서 고르기</button></div>
     <div class="pending-photos" id="finishPhotos"></div>
     <div class="actions">
       <button type="button" class="btn primary" id="finishConfirmBtn">완성 목록으로 옮기기</button>
@@ -342,6 +347,7 @@ textarea.input { min-height: 64px; resize: vertical; }
 </dialog>
 
 <input type="file" id="photoInput" accept="image/*" multiple hidden>
+<input type="file" id="cameraInput" accept="image/*" capture="environment" hidden>
 <input type="file" id="importInput" accept=".json,application/json,text/plain,application/octet-stream" hidden>
 <div class="toast" id="toast"></div>
 <div class="busy" id="busy">처리 중…</div>
@@ -674,12 +680,13 @@ async function addPhotos(projectId, processed) {
   for (const r of recs) photos.push({ id: r.id, projectId, createdAt: r.createdAt, thumb: r.thumb });
 }
 let photoPickHandler = null;
-function pickPhotos(handler) {
+function pickPhotos(handler, camera = false) {
   photoPickHandler = handler;
-  $("#photoInput").value = "";
-  $("#photoInput").click();
+  const input = $(camera ? "#cameraInput" : "#photoInput");
+  input.value = "";
+  input.click();
 }
-$("#photoInput").addEventListener("change", async e => {
+const onPhotosPicked = async e => {
   const files = [...e.target.files];
   if (!files.length || !photoPickHandler) return;
   busy(true);
@@ -690,7 +697,9 @@ $("#photoInput").addEventListener("change", async e => {
     }
     if (out.length) await photoPickHandler(out);
   } finally { busy(false); }
-});
+};
+$("#photoInput").addEventListener("change", onPhotosPicked);
+$("#cameraInput").addEventListener("change", onPhotosPicked);
 
 /* ---------- progress photos ---------- */
 function renderProg() {
@@ -877,7 +886,7 @@ async function renderDetailPhotos() {
     const blob = fulls[i] ? fulls[i].full : x.thumb;
     const u = URL.createObjectURL(blob); fullUrls.push(u);
     return `<div class="p"><img src="${u}" alt=""><button type="button" class="del" data-delphoto="${x.id}" >삭제</button></div>`;
-  }).join("") + `<button type="button" class="add-photo" id="detailAddPhoto">사진 추가</button>`;
+  }).join("") + `<div class="add-photo"><button type="button" class="btn" id="detailCamPhoto">사진 찍기</button><button type="button" class="btn" id="detailAddPhoto">앨범에서 고르기</button></div>`;
   const prog = progressOf(detailing.id).reverse();   // oldest first: reads as a timeline
   $("#detailProg").innerHTML = prog.length ? `<div class="prog-head"><span class="f">진행 기록 ${prog.length}장</span></div>` + prog.map(x => `
     <div class="prog">
@@ -991,8 +1000,8 @@ document.addEventListener("click", e => {
   if (t.dataset.delphoto) { deletePhoto(t.dataset.delphoto); return; }
   if (t.dataset.view) { openView(t.dataset.view); return; }
   if (t.id === "addBtn") { openEdit(null); return; }
-  if (t.id === "detailAddPhoto") {
-    pickPhotos(async out => { await addPhotos(detailing.id, out); await renderDetailPhotos(); render(); toast("사진을 추가했습니다"); });
+  if (t.id === "detailAddPhoto" || t.id === "detailCamPhoto") {
+    pickPhotos(async out => { await addPhotos(detailing.id, out); await renderDetailPhotos(); render(); toast("사진을 추가했습니다"); }, t.id === "detailCamPhoto");
   }
 });
 $("#tabActive").onclick = () => { tab = "active"; render(); };
@@ -1001,16 +1010,20 @@ $("#saveBtn").onclick = saveEdit;
 $("#nameIn").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); saveEdit(); } });
 $("#mmCustom").addEventListener("input", () => { if ($("#mmCustom").value.trim()) { selectedMm = null; renderMmGrid(); } });
 $("#finishBtn").onclick = () => openFinish(editing);
-$("#progAddBtn").onclick = () => pickPhotos(async out => {
+const addProgFrom = camera => pickPhotos(async out => {
   editing = await addProgress(editing, out);
   renderProg(); render(); toast(`진행 사진 ${out.length}장을 기록했습니다`);
-});
+}, camera);
+$("#progAddBtn").onclick = () => addProgFrom(false);
+$("#progCamBtn").onclick = () => addProgFrom(true);
 document.addEventListener("change", e => {
   const row = e.target.closest("[data-prog]");
   if (row && e.target.dataset.pfield) updateProg(row.dataset.prog, e.target.dataset.pfield, e.target.value);
 });
 $("#deleteBtn").onclick = async () => { if (await deleteProject(editing)) $("#editDlg").close(); };
-$("#finishPickBtn").onclick = () => pickPhotos(out => { finishPending.push(...out); renderFinishPending(); });
+const finishFrom = camera => pickPhotos(out => { finishPending.push(...out); renderFinishPending(); }, camera);
+$("#finishPickBtn").onclick = () => finishFrom(false);
+$("#finishCamBtn").onclick = () => finishFrom(true);
 $("#finishConfirmBtn").onclick = confirmFinish;
 $("#reopenBtn").onclick = async () => {
   const p = { ...detailing, status: "active", doneAt: null, updatedAt: Date.now() };
